@@ -1,0 +1,21 @@
+.venv/
+.review_lib/
+__pycache__/
+.pytest_cache/
+.ipynb_checkpoints/
+review/
+originals/
+HANDOFF_*.md
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+~$*
+*.log
+predictions.csv
+Final_Submission.zip
+proffeedback.docx
+project (1).pdf
+Project_proposal_group16 (1).docx
+Progress Report_*.docx

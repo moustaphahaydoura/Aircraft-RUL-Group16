@@ -1,0 +1,5 @@
+# Preserve the exact bytes recorded in the frozen experiment manifest.
+src/rul_pipeline.py -text
+train_FD001.txt -text
+test_FD001.txt -text
+RUL_FD001.txt -text

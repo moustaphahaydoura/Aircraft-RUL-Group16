@@ -1,0 +1,17 @@
+{
+  "status": "passed",
+  "models_checked": 14,
+  "test_engines": 100,
+  "validation_endpoints": 60,
+  "calibration_engines": 20,
+  "notebook_code_cells": 9,
+  "report_pages": 12,
+  "figure_png_count": 9,
+  "primary_candidates": 40,
+  "sensitivity_refits": 16,
+  "standalone_checkpoints": 13,
+  "native_xgboost_checkpoints": 5,
+  "docx_tables": 10,
+  "docx_figures": 9,
+  "label_free_inference_rows": 100
+}

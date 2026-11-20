@@ -1,0 +1,1202 @@
+[
+  [
+    "title",
+    "Predicting aircraft engine\nremaining useful life"
+  ],
+  [
+    "p",
+    "CMPS 261 · Final report · Group 16 · American University of Beirut\nMoustapha Haydoura · Wassim Fawaz · Mohamad Khalil\n20 November 2026"
+  ],
+  [
+    "h",
+    "1. Abstract"
+  ],
+  [
+    "p",
+    "We estimate remaining useful life (RUL) from the NASA C-MAPSS FD001 simulated engine trajectories and ask whether sequence learning improves on classical models given comparable history. A 60/20/20 engine split separates fitting, model selection, and interval calibration. We compare linear regression, random forests, XGBoost, a one-dimensional CNN, and an LSTM, with controlled historical-feature ablations. The model selected by validation, CNN MSE, achieves 14.93 cycles RMSE and 11.51 cycles MAE on 100 official test endpoints. The strongest observed classical and neural test results are 13.51 (RF history) and 14.93 (CNN MSE) cycles, respectively. Nominal 90% intervals for the selected model cover 81% of test targets. We report tuning, split sensitivity, inference cost, and failure modes rather than treating one aggregate score as evidence of operational reliability."
+  ],
+  [
+    "h",
+    "2. Introduction"
+  ],
+  [
+    "p",
+    "RUL is the number of operating cycles left before an engine reaches the end of its simulated trajectory. Predicting this quantity could help prioritize maintenance, but a useful predictor must distinguish normal variation from degradation and expose uncertainty when that distinction is weak. FD001 provides a manageable setting for studying those questions; it does not represent actual in-flight failures [1,2]."
+  ],
+  [
+    "p",
+    "Our research question has two parts: does including recent sensor history improve prediction, and does learning a sequence representation add value beyond engineered summaries of that same history? The second part is essential. Comparing a CNN with a current-reading baseline alone would confound model architecture with access to information."
+  ],
+  [
+    "fig",
+    "workflow",
+    "Figure 1. The evaluation protocol separates engines and freezes decisions before the revised final test evaluation. Calibration engines are never used for fitting or model selection."
+  ],
+  [
+    "page"
+  ],
+  [
+    "h",
+    "3. Dataset and preprocessing"
+  ],
+  [
+    "p",
+    "The supplied FD001 files contain 20,631 development observations from 100 run-to-failure engines and 13,096 observations from 100 partially observed test engines. The subset represents one operating condition and high-pressure compressor degradation [1]. Each row contains an engine ID, a cycle index, three operating settings, and 21 sensors. The separate test label file provides remaining cycles after each engine’s last observed cycle. Rows are checked for finite values, duplicate engine-cycle keys, contiguous cycles, and the expected 26-column schema."
+  ],
+  [
+    "table",
+    [
+      "Partition",
+      "Engines",
+      "Role"
+    ],
+    [
+      [
+        "Fitting",
+        "60",
+        "Fit scaler and candidate models"
+      ],
+      [
+        "Validation",
+        "20",
+        "Three prefixes/engine; tune and select checkpoints"
+      ],
+      [
+        "Calibration",
+        "20",
+        "One prefix/engine; set prediction interval width"
+      ],
+      [
+        "Official test",
+        "100",
+        "One final observed endpoint/engine; report results"
+      ]
+    ],
+    [
+      80,
+      55,
+      350
+    ]
+  ],
+  [
+    "p",
+    "For an engine ending at cycle T, the raw target at cycle t is T - t. The fitted target is min(T - t,125). This piecewise target reflects a modeling assumption that early healthy operation offers limited information about the eventual failure time; the cap is fixed from the existing project rather than tuned on test results. The primary evaluation still uses raw RUL. A second, explicitly labeled capped RMSE shows how much the evaluation changes when that assumption is also imposed on the target."
+  ],
+  [
+    "p",
+    "The retained channels are operating settings 1 and 2 and sensors 2, 3, 4, 7, 8, 9, 11, 12, 13, 14, 15, 17, 20, and 21: 14 sensors plus two settings, not 16 sensors. The original exclusion list is retained for FD001. Sensor 6 is near-constant; the other excluded channels are constant or effectively constant in this subset. The full variability audit is supplied in feature_audit.csv. Removing these channels does not establish that the remaining predictors are independent."
+  ],
+  [
+    "p",
+    "Min-max scaling is fitted only on the 60 fitting engines. Validation, calibration, and test observations use those same extrema, without refitting or clipping scaled inputs. Thirty-cycle windows remain within engine boundaries. The training label belongs to the final cycle of each window. All classical and neural models use the same endpoints, avoiding an advantage from extra training examples. The engine ID and absolute cycle index are excluded from predictors."
+  ],
+  [
+    "fig",
+    "dataset",
+    "Figure 2. Observed lengths, the raw and capped target for training engine 1, and causal 15-cycle means of sensor 11 for three training engines. The smoothing in the right panel is descriptive; fitted windows use 30 cycles."
+  ],
+  [
+    "p",
+    "The shortest official test history has 31 cycles. The inference implementation nevertheless supports shorter histories by repeating the first observation on the left. No engine is silently dropped, and test targets are aligned by ID. There are 11 test labels above 125; the target cap alone imposes an RMSE floor of 3.74 cycles for predictions restricted to [0,125]."
+  ],
+  [
+    "page"
+  ],
+  [
+    "h",
+    "4. Models, training, and validation"
+  ],
+  [
+    "sub",
+    "4.1 Model ladder and historical information"
+  ],
+  [
+    "p",
+    "The mean capped training target is a no-information baseline. Ordinary least-squares linear regression provides an interpretable reference. Random forests average randomized regression trees [4]. XGBoost builds regularized boosted trees [3]. For each historical representation, all features are computed causally from the same 30-cycle window: current readings (16 values), current + mean + population standard deviation (48), and current + mean + standard deviation + least-squares slope per cycle (64)."
+  ],
+  [
+    "p",
+    "The CNN follows the existing notebook: Conv1d(16,w,3) → ReLU → Conv1d(w,2w,3) → ReLU → MaxPool(2) → flatten → dense(64) → ReLU → scalar. Padding preserves temporal length. The LSTM uses one recurrent layer of width w, the last hidden output, and a 32-unit ReLU head [5]. Both consume the ordered 30 × 16 input. Convolution is a reasonable local temporal model [6], while the LSTM tests the originally proposed recurrent alternative. Neither architecture is assumed to outperform a tuned tree model."
+  ],
+  [
+    "p",
+    "The proposal specified linear regression, random forest, and LSTM; the progress report substituted XGBoost and CNN. The final experiment retains both sets. Boosting provides a regularized nonlinear baseline for the engineered summaries, while convolution tests whether short local patterns can be learned with parallel temporal filters. Restoring the proposal models makes these changes comparative choices rather than unsupported replacements. The exponential-loss instability mentioned in the progress report is not reproduced here; the weighted MSE is evaluated directly as a bounded-cost surrogate."
+  ],
+  [
+    "sub",
+    "4.2 Bounded search and model selection"
+  ],
+  [
+    "table",
+    [
+      "Family",
+      "Candidate search"
+    ],
+    [
+      [
+        "XGBoost",
+        "6 tuples (trees, depth, learning rate, child weight): (250,3,.03,5); (400,3,.05,5); (250,5,.03,5); (400,5,.05,5); (250,3,.05,20); (400,5,.03,20)"
+      ],
+      [
+        "Random forest",
+        "150 trees; max depth 12 or unlimited; minimum leaf size 5 or 15; feature fraction .8"
+      ],
+      [
+        "CNN / LSTM",
+        "Paired (width, learning rate): (32,.001), (64,.0005); CNN asymmetric additionally compares penalty ratios 2 and 5"
+      ]
+    ],
+    [
+      90,
+      395
+    ]
+  ],
+  [
+    "p",
+    "XGBoost uses histogram trees, row and column subsampling .8, and L2 regularization 5. Sensor-only and top-six ablations reuse the selected history-model configuration; they are not independently retuned. Neural targets are divided by 125. Adam uses weight decay 1e-5, batches of 256, gradient-norm clipping at 5, at most 35 epochs, and patience 8. The best checkpoint is restored. These small searches are documented experiments, not claims of exhaustive optimization."
+  ],
+  [
+    "p",
+    "With seed 42, 60 engines fit the models, 20 provide validation, and 20 remain reserved for calibration. For each validation engine, three distinct observed prefixes are drawn uniformly from endpoints allowing 30 observations and at most 150 remaining cycles. This produces 60 validation endpoints with equal engine representation. Candidate RMSE is computed against raw RUL. The asymmetric CNN deliberately selects by validation PHM instead; the final deployment candidate across model variants is still selected by validation raw RMSE. The prefix scheme approximates partial histories but is not guaranteed to match the official censoring distribution."
+  ],
+  [
+    "sub",
+    "4.3 Metrics and the asymmetric loss"
+  ],
+  [
+    "p",
+    "For d = predicted RUL - true RUL, RMSE = sqrt(mean(d²)) and MAE = mean(|d|). The PHM sum is Σ[exp(-d/13)-1] for d < 0 and Σ[exp(d/10)-1] for d ≥ 0 [2]. Positive errors therefore receive the larger penalty. The supplied notebook had these denominators reversed. Training the asymmetric CNN instead uses the stable surrogate mean[d² × (r if d > 0 else 1)], with r = 2 or 5, not the exponential score itself. All point predictions are clipped to [0,125]."
+  ],
+  [
+    "page"
+  ],
+  [
+    "h",
+    "5. Results and analysis"
+  ],
+  [
+    "sub",
+    "5.1 Final endpoint comparison"
+  ],
+  [
+    "p",
+    "Table 1 reports every final model variant on the same 100 test endpoints. CNN MSE was selected before the revised test evaluation. The lowest observed test RMSE belongs to RF history; this retrospective rank does not change the frozen selection. All errors are in cycles except PHM, a dimensionless sum over 100 engines. Lower values are better."
+  ],
+  [
+    "table",
+    [
+      "Model",
+      "Val. RMSE",
+      "Test RMSE",
+      "MAE",
+      "PHM",
+      "Capped RMSE"
+    ],
+    [
+      [
+        "Mean baseline",
+        "40.07",
+        "41.84",
+        "36.18",
+        "18331.8",
+        "40.51"
+      ],
+      [
+        "Linear instant",
+        "24.88",
+        "21.49",
+        "17.22",
+        "1063.0",
+        "20.26"
+      ],
+      [
+        "XGB instant",
+        "24.56",
+        "18.01",
+        "13.37",
+        "619.6",
+        "16.80"
+      ],
+      [
+        "RF instant",
+        "24.83",
+        "18.44",
+        "13.72",
+        "709.8",
+        "17.30"
+      ],
+      [
+        "Linear mean_std",
+        "22.16",
+        "18.88",
+        "15.37",
+        "607.7",
+        "17.49"
+      ],
+      [
+        "XGB mean_std",
+        "22.45",
+        "18.34",
+        "13.49",
+        "741.8",
+        "17.32"
+      ],
+      [
+        "Linear history",
+        "17.75",
+        "16.37",
+        "12.84",
+        "453.2",
+        "15.00"
+      ],
+      [
+        "XGB history",
+        "14.72",
+        "13.72",
+        "10.47",
+        "261.4",
+        "12.44"
+      ],
+      [
+        "RF history",
+        "15.77",
+        "13.51",
+        "9.95",
+        "270.2",
+        "12.34"
+      ],
+      [
+        "XGB sensors only",
+        "14.80",
+        "13.93",
+        "10.53",
+        "276.1",
+        "12.75"
+      ],
+      [
+        "XGB top6 sensors",
+        "19.23",
+        "16.58",
+        "12.52",
+        "582.4",
+        "15.44"
+      ],
+      [
+        "CNN MSE",
+        "14.22",
+        "14.93",
+        "11.51",
+        "356.8",
+        "13.61"
+      ],
+      [
+        "CNN asymmetric",
+        "14.49",
+        "15.15",
+        "11.51",
+        "363.4",
+        "13.70"
+      ],
+      [
+        "LSTM MSE",
+        "14.33",
+        "15.00",
+        "11.03",
+        "394.0",
+        "13.82"
+      ]
+    ],
+    [
+      120,
+      65,
+      65,
+      55,
+      80,
+      100
+    ]
+  ],
+  [
+    "p",
+    "Table 1. Validation uses 60 prefixes from 20 engines; test uses 100 endpoints from 100 engines. Their PHM sums should not be compared directly because their sample counts differ. The last column alone uses capped truth."
+  ],
+  [
+    "fig",
+    "model_comparison",
+    "Figure 3. Test accuracy and asymmetric penalty. The logarithmic PHM axis prevents the weakest baseline from obscuring the remaining models. The green bar marks the validation-selected model where present."
+  ],
+  [
+    "p",
+    "The best observed neural result is 1.42 cycles higher in RMSE than the best observed classical result. These are descriptive comparisons across several candidates. For the frozen selected model, an engine-bootstrap 95% interval for test RMSE is [12.77, 16.98]. Paired differences for every candidate are supplied in bootstrap_intervals.csv. Resampling 100 test engines 5,000 times measures test-sample uncertainty conditional on the fitted models, not uncertainty from retraining."
+  ],
+  [
+    "page"
+  ],
+  [
+    "sub",
+    "5.2 Historical features and sensor ablations"
+  ],
+  [
+    "p",
+    "Adding mean, standard deviation, and slope to XGBoost changes raw test RMSE from 18.01 to 13.72 cycles, a 4.29-cycle reduction. The mean/std-only variant reaches 18.34. Each representation was tuned separately within the same model family. From current readings to the full historical representation, linear regression improves from 21.49 to 16.37 cycles and random forest from 18.44 to 13.51."
+  ],
+  [
+    "p",
+    "Removing operating settings leaves 14 sensor channels and 56 engineered values, with test RMSE 13.93. Keeping six sensor channels (s2, s3, s9, s11, s15, s17) leaves 24 engineered values and gives 16.58. Channels are selected by the fitting model’s gain importance, summed over current, mean, standard deviation, and slope features. This is a predictive ranking, not evidence of a causal physical mechanism; correlated channels can share or substitute importance."
+  ],
+  [
+    "fig",
+    "ablations",
+    "Figure 4. XGBoost historical-feature and sensor ablations. Sensor subsets reuse the full-history hyperparameters. Training gain ranks channels without consulting test targets."
+  ],
+  [
+    "sub",
+    "5.3 Optimization behavior"
+  ],
+  [
+    "fig",
+    "learning_curves",
+    "Figure 5. Loss and validation RMSE for the selected candidate within each neural family. The asymmetric training loss has a different scale; its checkpoint selection uses PHM, so its lowest-RMSE epoch need not be retained."
+  ],
+  [
+    "p",
+    "Validation curves provide a direct check on the fixed-epoch procedure in the original notebook. Training loss alone is insufficient for selecting a checkpoint, and an improvement in an overestimation-weighted loss need not improve RMSE. The saved histories include every epoch of each candidate, including trials that were not selected."
+  ],
+  [
+    "page"
+  ],
+  [
+    "sub",
+    "5.4 Failure analysis and a tested mitigation"
+  ],
+  [
+    "fig",
+    "failure_scatter",
+    "Figure 6. Endpoint predictions for historical XGBoost and both CNN objectives. Red points overestimate remaining life; blue points underestimate it. The horizontal dotted line is the fixed prediction cap."
+  ],
+  [
+    "fig",
+    "failure_stages",
+    "Figure 7. Error magnitude and bias by true remaining-life range. Positive bias corresponds to overestimation. Stage metrics use disjoint groups of the same official test engines."
+  ],
+  [
+    "p",
+    "The asymmetric CNN reduced the overall frequency of overestimation from 58% to 51%. For the 25 engines with 30 or fewer cycles left, that frequency fell from 72% to 48%. Total PHM rose from 356.8 to 363.4 and raw RMSE from 14.93 to 15.15 cycles, so fewer optimistic estimates did not translate to a lower aggregate penalty. The two CNN variants also differ in selected architecture and checkpoint, limiting what we can attribute to the loss alone."
+  ],
+  [
+    "p",
+    "The cap necessarily underestimates targets above 125. Even below that threshold, similar sensor states can correspond to different remaining horizons because trajectories begin with different health states and degradation rates. The plots and subgroup errors are consistent with that ambiguity but do not identify its physical cause. A practical next experiment would compare uncapped or multi-stage targets using development engines only, followed by evaluation on an additional untouched subset."
+  ],
+  [
+    "table",
+    [
+      "Engine",
+      "Observed cycles",
+      "True RUL",
+      "Predicted RUL",
+      "Error"
+    ],
+    [
+      [
+        67,
+        71,
+        "77",
+        "119.70",
+        "+42.70"
+      ],
+      [
+        79,
+        101,
+        "63",
+        "97.14",
+        "+34.14"
+      ],
+      [
+        96,
+        97,
+        "137",
+        "103.80",
+        "-33.20"
+      ],
+      [
+        45,
+        152,
+        "114",
+        "80.88",
+        "-33.12"
+      ],
+      [
+        93,
+        244,
+        "85",
+        "51.92",
+        "-33.08"
+      ]
+    ],
+    [
+      70,
+      110,
+      100,
+      110,
+      95
+    ]
+  ],
+  [
+    "p",
+    "Table 2. The five largest absolute errors of CNN MSE; these examples are selected after evaluation for diagnosis, not for additional tuning. Full predictions and interval bounds are supplied in test_predictions.csv."
+  ],
+  [
+    "page"
+  ],
+  [
+    "sub",
+    "5.5 Can the uncertainty estimates be trusted?"
+  ],
+  [
+    "p",
+    "A separate set of 20 calibration engines supplies one randomly truncated endpoint each. For a fixed model, we calculate the absolute raw-RUL residual on each endpoint. The nominal 90% split-conformal radius is the 19th smallest of 20 residuals: ceil((20+1) × .9) = 19. Intervals are [max(0,prediction-q), prediction+q]. We do not cap the upper bound at 125, because the target is raw remaining life [7]."
+  ],
+  [
+    "p",
+    "For CNN MSE, the radius is 21.97 cycles. On the official test engines, coverage is 81% and mean width is 42.87 cycles. These two quantities must be read together: a wide interval can cover many outcomes without providing a precise maintenance decision. Figure 8 checks whether aggregate coverage hides weaker performance in a particular life stage."
+  ],
+  [
+    "fig",
+    "uncertainty",
+    "Figure 8. Nominal 90% residual intervals for the validation-selected model, sorted by true test RUL for visualization only. Right: empirical coverage by life stage; no test labels are used to set interval widths."
+  ],
+  [
+    "table",
+    [
+      "Model",
+      "Coverage (%)",
+      "Mean width",
+      "Radius q"
+    ],
+    [
+      [
+        "XGB history",
+        "85",
+        "39.42",
+        "20.31"
+      ],
+      [
+        "CNN MSE",
+        "81",
+        "42.87",
+        "21.97"
+      ],
+      [
+        "CNN asymmetric",
+        "80",
+        "36.53",
+        "18.73"
+      ],
+      [
+        "LSTM MSE",
+        "86",
+        "44.85",
+        "23.25"
+      ]
+    ],
+    [
+      150,
+      110,
+      110,
+      115
+    ]
+  ],
+  [
+    "p",
+    "Table 3. Interval widths are in cycles. Calibration residuals are independent of fitting and model selection, but only 20 independent engines determine each radius."
+  ],
+  [
+    "p",
+    "Split conformal prediction relies on exchangeability between calibration and deployment examples. Our synthetic prefix selection and the official test censoring process may differ, so nominal 90% coverage is not an unconditional guarantee here. It is also a marginal statement, not a promise for every engine or life stage. We therefore report observed coverage and widths, avoid describing the intervals as validated safety bounds, and recommend additional independent calibration under the intended censoring process."
+  ],
+  [
+    "page"
+  ],
+  [
+    "sub",
+    "5.6 Computational complexity and split sensitivity"
+  ],
+  [
+    "fig",
+    "complexity_sensitivity",
+    "Figure 9. Selected-fit cost versus test RMSE, and validation RMSE on three engine partitions. Seeds 7 and 21 reuse seed-42 hyperparameters and reselect neural checkpoints using their own validation engines."
+  ],
+  [
+    "table",
+    [
+      "Model",
+      "Fit (s)",
+      "100 inputs (ms)",
+      "Complexity count",
+      "File (KiB)"
+    ],
+    [
+      [
+        "Linear history",
+        "0.02",
+        "0.52",
+        "65",
+        "1.1"
+      ],
+      [
+        "RF history",
+        "13.04",
+        "35.67",
+        "180,218",
+        "12718.6"
+      ],
+      [
+        "XGB instant",
+        "0.72",
+        "0.74",
+        "22,032",
+        "998.8"
+      ],
+      [
+        "XGB history",
+        "2.45",
+        "1.50",
+        "22,866",
+        "1026.5"
+      ],
+      [
+        "CNN MSE",
+        "14.33",
+        "1.78",
+        "69,345",
+        "274.5"
+      ],
+      [
+        "CNN asymmetric",
+        "17.49",
+        "3.09",
+        "150,849",
+        "593.4"
+      ],
+      [
+        "LSTM MSE",
+        "23.68",
+        "0.72",
+        "7,489",
+        "33.2"
+      ]
+    ],
+    [
+      125,
+      70,
+      100,
+      110,
+      80
+    ]
+  ],
+  [
+    "p",
+    "Table 4. Complexity count means fitted coefficients for linear regression, tree nodes for forests/boosting, and trainable parameters for neural networks; these counts are not directly interchangeable. Latency is the median of 15 CPU calls after three warm-ups, including window-to-feature conversion and prediction but excluding file I/O, scaling, and window construction. Neural fit time includes validation passes and early stopping. The table shows only the selected fit, not the entire search."
+  ],
+  [
+    "p",
+    "Runs use Python 3.14.8, PyTorch 2.15.0+cpu, four worker threads, and CPU execution on Intel64 Family 6 Model 140 Stepping 1, GenuineIntel. Total development wall time across all candidates and three splits is 13.3 minutes. This is a local cost comparison, not a hardware-independent benchmark; background activity and small-batch overhead affect timings. All selected checkpoints and the scaler are included for label-free inference."
+  ],
+  [
+    "table",
+    [
+      "Model",
+      "Mean val. RMSE",
+      "SD",
+      "Minimum",
+      "Maximum"
+    ],
+    [
+      [
+        "CNN MSE",
+        "14.57",
+        "1.30",
+        "13.48",
+        "16.01"
+      ],
+      [
+        "CNN asymmetric",
+        "15.07",
+        "1.59",
+        "13.84",
+        "16.87"
+      ],
+      [
+        "LSTM MSE",
+        "14.49",
+        "0.97",
+        "13.61",
+        "15.52"
+      ],
+      [
+        "XGB history",
+        "15.45",
+        "0.64",
+        "14.72",
+        "15.89"
+      ]
+    ],
+    [
+      150,
+      100,
+      75,
+      80,
+      80
+    ]
+  ],
+  [
+    "p",
+    "Table 5. Sensitivity across development seeds 42, 7, and 21. The engine splits overlap, and additional splits reuse primary-split selected settings. This is a stress check on conclusions, not independent nested cross-validation or a confidence interval. Variation combines engine composition, random prefix selection, and model randomness. The official test is evaluated only for the frozen primary-split predictors."
+  ],
+  [
+    "page"
+  ],
+  [
+    "h",
+    "6. Conclusion"
+  ],
+  [
+    "p",
+    "Historical features gave the clearest accuracy gain. XGBoost improved from 18.01 cycles test RMSE with current readings to 13.72 with historical summaries. The validation-selected CNN MSE reached 14.93, while RF history had the lowest observed test RMSE at 13.51. The paired 95% bootstrap interval for historical XGBoost minus CNN MSE spans [-2.45, 0.05] cycles, leaving the test advantage uncertain."
+  ],
+  [
+    "p",
+    "The overall results give limited reason to pay the CNN’s fitting cost on FD001. Historical XGBoost minus CNN validation RMSE ranged from -0.26 to +2.41 cycles across the three splits. The selected CNN fit took 5.9 times as long as the XGBoost fit, while both predicted a prepared batch of 100 histories in under 2 ms. For the 25 engines with 0–30 cycles remaining, the CNN reached 4.06 cycles RMSE, compared with 5.54 for historical XGBoost. A future study focused on near-failure decisions could validate directly on that horizon."
+  ],
+  [
+    "p",
+    "The principal methodological improvement is a comparison that controls information access and avoids test-driven tuning in this revision. The earlier RMSE 65.02 baseline and CNN RMSE 17.05 are not used as final evidence: no saved split, tuning history, checkpoint, or prediction file supports their reproduction, and the supplied scoring function reversed the PHM penalties. The new experiment reports both successful and unsuccessful variants, along with their resource costs and uncertainty."
+  ],
+  [
+    "p",
+    "The scope remains one simulated operating condition and fault mode. The 125-cycle cap creates a known long-horizon bias; calibration uses only 20 engines; repeated-split results are not independent CV; and the public test set had already been inspected in the progress report. Freezing the revised protocol cannot undo that historical exposure. Further work should use an untouched evaluation set, test uncapped or stage-specific targets, repeat training seeds within each split, and assess FD002-FD004 before making broader generalization claims."
+  ],
+  [
+    "sub",
+    "Submission and reproducibility"
+  ],
+  [
+    "p",
+    "Final_Submission.zip contains the executed notebook, reusable Python modules, candidate scores and predictions, independent calibration residuals, environment versions, trained model files, and the fitted scaler. The README documents training, evaluation, figure regeneration, document generation, and label-free inference. Data files are credited to NASA Ames PCoE [1]."
+  ],
+  [
+    "link",
+    "https://github.com/moustaphahaydoura/Aircraft-RUL-Group16"
+  ],
+  [
+    "table",
+    [
+      "Feedback / requirement",
+      "Where addressed"
+    ],
+    [
+      [
+        "Engine-disjoint validation and frozen selection",
+        "Sections 3–4, splits.json, frozen_development.json"
+      ],
+      [
+        "Current versus historical classical models",
+        "Section 5.2, tuning_results.csv, Figure 4"
+      ],
+      [
+        "Revisit weak XGBoost and show tuning",
+        "Sections 4.2 and 5.1, Appendices A–B"
+      ],
+      [
+        "Explain changes from proposal",
+        "Section 4.1"
+      ],
+      [
+        "Failure mitigation, uncertainty, complexity",
+        "Sections 5.4–5.6, Figures 6–9"
+      ],
+      [
+        "Reproducible trained code",
+        "Notebook, src/, models/, README.md"
+      ]
+    ],
+    [
+      200,
+      285
+    ]
+  ],
+  [
+    "page"
+  ],
+  [
+    "h",
+    "7. References"
+  ],
+  [
+    "p",
+    "[1] A. Saxena and K. Goebel (2008). Turbofan Engine Degradation Simulation Data Set. NASA Ames Prognostics Center of Excellence.\nhttps://www.nasa.gov/intelligent-systems-division/discovery-and-systems-health/pcoe/pcoe-data-set-repository/"
+  ],
+  [
+    "p",
+    "[2] A. Saxena, K. Goebel, D. Simon and N. Eklund (2008). Damage propagation modeling for aircraft engine run-to-failure simulation. International Conference on Prognostics and Health Management.\nhttps://ntrs.nasa.gov/api/citations/20090029214/downloads/20090029214.pdf"
+  ],
+  [
+    "p",
+    "[3] T. Chen and C. Guestrin (2016). XGBoost: A scalable tree boosting system. KDD. DOI: 10.1145/2939672.2939785.\nhttps://arxiv.org/abs/1603.02754"
+  ],
+  [
+    "p",
+    "[4] L. Breiman (2001). Random forests. Machine Learning 45, 5-32.\nhttps://www.stat.berkeley.edu/~breiman/randomforest2001.pdf"
+  ],
+  [
+    "p",
+    "[5] S. Hochreiter and J. Schmidhuber (1997). Long short-term memory. Neural Computation 9(8), 1735-1780.\nhttps://doi.org/10.1162/neco.1997.9.8.1735"
+  ],
+  [
+    "p",
+    "[6] X. Li, Q. Ding and J.-Q. Sun (2018). Remaining useful life estimation in prognostics using deep convolution neural networks. Reliability Engineering & System Safety 172, 1-11.\nhttps://escholarship.org/uc/item/5ns8r3fs"
+  ],
+  [
+    "p",
+    "[7] A. N. Angelopoulos and S. Bates (2021; revised 2022). A gentle introduction to conformal prediction and distribution-free uncertainty quantification.\nhttps://arxiv.org/abs/2107.07511"
+  ],
+  [
+    "p",
+    "Course-specific requirements: supplied CMPS 261 course project description (project (1).pdf) and professor feedback (proffeedback.docx). The supplied proposal and progress report establish project history; their preliminary numerical claims are superseded by this final run."
+  ],
+  [
+    "page"
+  ],
+  [
+    "h",
+    "Appendix A. Selected configurations"
+  ],
+  [
+    "p",
+    "These settings were selected using development data. Exact settings and calibration residuals are machine-readable in frozen_development.json. The model is retained at the chosen validation checkpoint, without refitting on the validation or calibration engines."
+  ],
+  [
+    "table",
+    [
+      "Model",
+      "Selected settings"
+    ],
+    [
+      [
+        "Mean baseline",
+        "No tuned hyperparameters"
+      ],
+      [
+        "Linear instant",
+        "No tuned hyperparameters"
+      ],
+      [
+        "XGB instant",
+        "n_estimators=400; max_depth=5; learning_rate=0.05; min_child_weight=5"
+      ],
+      [
+        "RF instant",
+        "n_estimators=150; max_depth=None; min_samples_leaf=5; max_features=0.8"
+      ],
+      [
+        "Linear mean_std",
+        "No tuned hyperparameters"
+      ],
+      [
+        "XGB mean_std",
+        "n_estimators=250; max_depth=5; learning_rate=0.03; min_child_weight=5"
+      ],
+      [
+        "Linear history",
+        "No tuned hyperparameters"
+      ],
+      [
+        "XGB history",
+        "n_estimators=400; max_depth=5; learning_rate=0.05; min_child_weight=5"
+      ],
+      [
+        "RF history",
+        "n_estimators=150; max_depth=12; min_samples_leaf=5; max_features=0.8"
+      ],
+      [
+        "XGB sensors only",
+        "n_estimators=400; max_depth=5; learning_rate=0.05; min_child_weight=5; features=['sensor_2', 'sensor_3', 'sensor_4', 'sensor_7', 'sensor_8', 'sensor_9', 'sensor_11', 'sensor_12', 'sensor_13', 'sensor_14', 'sensor_15', 'sensor_17', 'sensor_20', 'sensor_21']"
+      ],
+      [
+        "XGB top6 sensors",
+        "n_estimators=400; max_depth=5; learning_rate=0.05; min_child_weight=5; features=['sensor_2', 'sensor_3', 'sensor_9', 'sensor_11', 'sensor_15', 'sensor_17']"
+      ],
+      [
+        "CNN MSE",
+        "width=32; lr=0.001; ratio=1.0; best_epoch=15"
+      ],
+      [
+        "CNN asymmetric",
+        "width=64; lr=0.0005; ratio=2.0; best_epoch=8"
+      ],
+      [
+        "LSTM MSE",
+        "width=32; lr=0.001; ratio=1.0; best_epoch=35"
+      ]
+    ],
+    [
+      130,
+      355
+    ]
+  ],
+  [
+    "p",
+    "Every nonconstant model and the scaler have serialized artifacts in models/. For portability, neural .pt files include the state dictionary, architecture configuration, feature order, window length, and cap. XGBoost and random-forest bundles record their feature variant and sensor indices. Load local joblib files only from a trusted source, using the supplied environment."
+  ],
+  [
+    "page"
+  ],
+  [
+    "h",
+    "Appendix B. Candidate tuning results"
+  ],
+  [
+    "p",
+    "Candidate numbers follow the search order in Section 4.2. XGBoost candidates 0–5 use the six listed tuples. Random forest candidates 0–3 use (depth, minimum leaf) = (12,5), (unlimited,5), (12,15), (unlimited,15). Standard neural candidates 0/1 use the two paired settings. Asymmetric CNN candidates 0–3 use (32,.001,2), (32,.001,5), (64,.0005,2), (64,.0005,5). The sensitivity refit scores are in tuning_results.csv."
+  ],
+  [
+    "table",
+    [
+      "Model",
+      "Trial",
+      "Val. RMSE",
+      "Val. MAE",
+      "Val. PHM",
+      "Fit (s)"
+    ],
+    [
+      [
+        "Mean baseline",
+        0,
+        "40.07",
+        "35.05",
+        "7082.0",
+        "0.00"
+      ],
+      [
+        "Linear instant",
+        0,
+        "24.88",
+        "20.95",
+        "723.9",
+        "0.02"
+      ],
+      [
+        "XGB instant",
+        0,
+        "24.87",
+        "20.40",
+        "871.1",
+        "0.41"
+      ],
+      [
+        "XGB instant",
+        1,
+        "24.79",
+        "20.12",
+        "932.2",
+        "0.69"
+      ],
+      [
+        "XGB instant",
+        2,
+        "24.87",
+        "20.21",
+        "968.2",
+        "0.52"
+      ],
+      [
+        "XGB instant",
+        3,
+        "24.56",
+        "20.03",
+        "889.1",
+        "0.72"
+      ],
+      [
+        "XGB instant",
+        4,
+        "24.82",
+        "20.23",
+        "889.6",
+        "0.33"
+      ],
+      [
+        "XGB instant",
+        5,
+        "24.89",
+        "20.19",
+        "1013.8",
+        "0.69"
+      ],
+      [
+        "RF instant",
+        0,
+        "25.24",
+        "20.77",
+        "959.2",
+        "2.50"
+      ],
+      [
+        "RF instant",
+        1,
+        "24.83",
+        "20.47",
+        "885.0",
+        "2.91"
+      ],
+      [
+        "RF instant",
+        2,
+        "25.27",
+        "20.99",
+        "901.1",
+        "2.28"
+      ],
+      [
+        "RF instant",
+        3,
+        "25.06",
+        "20.72",
+        "906.0",
+        "2.40"
+      ],
+      [
+        "Linear mean_std",
+        0,
+        "22.16",
+        "18.49",
+        "494.0",
+        "0.04"
+      ],
+      [
+        "XGB mean_std",
+        0,
+        "23.89",
+        "19.56",
+        "754.8",
+        "0.65"
+      ],
+      [
+        "XGB mean_std",
+        1,
+        "23.09",
+        "18.54",
+        "710.4",
+        "0.99"
+      ],
+      [
+        "XGB mean_std",
+        2,
+        "22.45",
+        "18.23",
+        "623.5",
+        "1.36"
+      ],
+      [
+        "XGB mean_std",
+        3,
+        "22.60",
+        "18.37",
+        "667.4",
+        "1.81"
+      ],
+      [
+        "XGB mean_std",
+        4,
+        "23.11",
+        "18.70",
+        "699.3",
+        "0.61"
+      ],
+      [
+        "XGB mean_std",
+        5,
+        "22.83",
+        "18.21",
+        "704.2",
+        "1.68"
+      ],
+      [
+        "Linear history",
+        0,
+        "17.75",
+        "14.87",
+        "280.2",
+        "0.02"
+      ],
+      [
+        "XGB history",
+        0,
+        "15.26",
+        "11.69",
+        "206.8",
+        "0.88"
+      ],
+      [
+        "XGB history",
+        1,
+        "14.93",
+        "11.51",
+        "203.1",
+        "1.23"
+      ],
+      [
+        "XGB history",
+        2,
+        "14.80",
+        "11.67",
+        "187.4",
+        "1.64"
+      ],
+      [
+        "XGB history",
+        3,
+        "14.72",
+        "11.56",
+        "197.7",
+        "2.45"
+      ],
+      [
+        "XGB history",
+        4,
+        "15.09",
+        "11.65",
+        "207.2",
+        "0.81"
+      ],
+      [
+        "XGB history",
+        5,
+        "14.90",
+        "11.61",
+        "194.9",
+        "2.31"
+      ],
+      [
+        "RF history",
+        0,
+        "15.77",
+        "12.41",
+        "218.2",
+        "13.04"
+      ],
+      [
+        "RF history",
+        1,
+        "16.27",
+        "12.76",
+        "239.9",
+        "36.07"
+      ],
+      [
+        "RF history",
+        2,
+        "16.03",
+        "12.61",
+        "226.8",
+        "22.85"
+      ],
+      [
+        "RF history",
+        3,
+        "16.31",
+        "12.80",
+        "242.5",
+        "13.37"
+      ],
+      [
+        "XGB sensors only",
+        0,
+        "14.80",
+        "11.90",
+        "198.1",
+        "2.47"
+      ],
+      [
+        "XGB top6 sensors",
+        0,
+        "19.23",
+        "15.23",
+        "474.7",
+        "1.08"
+      ],
+      [
+        "CNN MSE",
+        0,
+        "14.22",
+        "10.94",
+        "167.5",
+        "14.33"
+      ],
+      [
+        "CNN MSE",
+        1,
+        "14.57",
+        "11.15",
+        "187.6",
+        "23.92"
+      ],
+      [
+        "CNN asymmetric",
+        0,
+        "15.07",
+        "11.21",
+        "178.7",
+        "14.17"
+      ],
+      [
+        "CNN asymmetric",
+        1,
+        "15.22",
+        "11.22",
+        "186.3",
+        "13.71"
+      ],
+      [
+        "CNN asymmetric",
+        2,
+        "14.49",
+        "10.96",
+        "177.3",
+        "17.49"
+      ],
+      [
+        "CNN asymmetric",
+        3,
+        "15.16",
+        "11.06",
+        "186.4",
+        "23.23"
+      ],
+      [
+        "LSTM MSE",
+        0,
+        "14.33",
+        "10.46",
+        "191.7",
+        "23.68"
+      ],
+      [
+        "LSTM MSE",
+        1,
+        "14.89",
+        "11.48",
+        "211.6",
+        "73.92"
+      ]
+    ],
+    [
+      140,
+      45,
+      75,
+      75,
+      80,
+      70
+    ]
+  ]
+]

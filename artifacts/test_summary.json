@@ -1,0 +1,13 @@
+{
+  "test_rows": 13096,
+  "test_engines": 100,
+  "min_history": 31,
+  "padded_engines": [],
+  "true_rul_min": 7.0,
+  "true_rul_max": 145.0,
+  "above_cap": 11,
+  "cap_only_rmse_floor": 3.7376463182061515,
+  "selected_model": "CNN MSE",
+  "test_sha256": "3cda7109ce17bafb5443f2ac926cfcf88154b941b8c4cf95eb55d1ddd6f52851",
+  "labels_sha256": "a19c8ec94931949d0485bdc35118206e9c81c4547b422efb9cf86f4ceddbceca"
+}
